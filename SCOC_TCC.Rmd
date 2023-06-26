@@ -1,0 +1,340 @@
+---
+title: "SCOC"
+author: "ChuehChenTung"
+date: '2023-06-12'
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_chunk$set(fig.width=15, fig.height=10) 
+```
+
+<font size="4"> 
+**Caption:** Map of SW region of Taiwan.
+</font>
+
+```{r}
+rm(list=ls())
+library(readxl)
+library(openxlsx)
+library(tidyverse)
+library(dplyr)
+library(ggrepel)
+library(marmap)
+library(maptools)
+library(raster)
+library(viridis)
+setwd("C:/Users/user/Downloads/oc remineralization")
+GPSC_TOU <- read.csv("GPSC_TOU.csv")
+
+loc <- read_excel("GPSC_macro_sorting_2022.06.20.xlsx", sheet=1)
+site<-loc %>% 
+  group_by(Cruise, Station)%>%
+  summarise(Latitude=mean(Latitude),
+            Longitude=mean(Longitude))
+
+GPSC_TOU<-full_join(GPSC_TOU,site,by=c("Cruise","Station")) %>% filter(!is.na(Date))
+GPSC_TOU$Latitude[is.na(GPSC_TOU$Latitude)==T&GPSC_TOU$Station=="GC2"]<-22.40067
+GPSC_TOU$Longitude[is.na(GPSC_TOU$Longitude)==T&GPSC_TOU$Station=="GC2"]<-120.3348
+GPSC_TOU$Longitude[is.na(GPSC_TOU$Longitude)==T&GPSC_TOU$Station=="GC3"]<-120.2665
+GPSC_TOU$Latitude[is.na(GPSC_TOU$Latitude)==T&GPSC_TOU$Station=="GC3"]<-22.34978
+GPSC_TOU$Habitat[GPSC_TOU$Station %in% c( "L1", "S3", "S4", "S5", "S6", "S7", "S1", "S2")]<-"Shelf"
+TOU<-GPSC_TOU %>%  dplyr::select(c("Cruise","Habitat","Region","Depth","Station","Deployment","Tube","In_situ_temperature","In_situ_DO_flux"))
+sed<-read_excel("GPSC_sediment_2021.08.16_ysl.xlsx", sheet=1)
+sed<-sed %>% filter(Section=="0-1") %>%  dplyr::select(c("Cruise","Station","Deployment","Section","Clay","Silt","Sand","CN","TOC","TN")) %>% 
+  filter(!is.na(Clay))
+
+TOU<-full_join(TOU,sed,by=c("Cruise","Station")) %>% filter(!is.na(In_situ_DO_flux)) %>% 
+  dplyr::select(c(1:5,8:9,12:17))
+
+#map
+Station<-GPSC_TOU %>% 
+  dplyr::select(c("Station","Latitude","Longitude","Habitat","Region")) %>%
+  group_by(Station,Habitat,Region) %>% 
+  summarise(long=mean(Longitude),
+            lat=mean(Latitude)) %>% 
+  filter(long > 120 & long < 120.8) %>% 
+  filter(lat  > 21.6 & lat < 22.6)
+Station<-unique(Station)
+GPSC<-read.table('119_121_21_23.xyz',
+                 col.names = c("long", "lat", "depth")) %>%
+  data.frame %>% 
+  filter(long > 120 & long < 120.8) %>% 
+  filter(lat  > 21.6 & lat < 22.6)
+df_poc<-data.frame(date=c("090512","092512","102912","120112",
+                          "041413","041913","071613","083113",
+                          "090313","090913","101213","033014",
+                          "042214","062414"),
+                   Long=c(120,119.88333,120.31666,120.25,
+                          120.33333,120.2,120.33333,120.33333,
+                          120.33333,120.33333,120.35,120.31666,
+                          120.23333,120.31666),
+                   Lat=c(21.71666,21.61666,22,22,
+                         22,22.36666,22,22,
+                         22,22,22.16666,22.03333,
+                         22,21.96666)
+                   )
+ggplot()+
+  xlab("Longitude")+ylab("Latitude")+
+  geom_tile(data = GPSC[GPSC$depth >= 0,], 
+            aes(x = long, y = lat), fill = "grey65") +
+  geom_raster(data = GPSC[GPSC$depth < 0 & GPSC$depth > -3000 ,],
+              aes(x =long, y = lat, fill = depth)) +
+  scale_fill_viridis(option = "G",limits = c(-3000, 0),
+                     breaks = seq(0,-3000, -500),
+                     labels = abs) +
+  geom_contour(data =GPSC, aes(x=long, y=lat, z=depth),
+               breaks=0,size=0.8,colour="black")+
+  geom_contour(data =GPSC, aes(x=long, y=lat, z=depth),
+               breaks=c(-300,-600,-900,-1200,-1500,-1800,-2100,-2400),size=0.3,colour="bisque4")+
+  coord_fixed(expand = FALSE) +
+  labs(fill = "Depth (m)")+
+  geom_point(data = Station,aes(x = long, y =lat,
+                                color=Habitat,shape=Region),size=5)+
+  scale_color_manual(values=c('#610345','#F34213', '#E3B505'))+
+  geom_text_repel(data=Station,aes(x = long, y = lat,
+                                   label = Station),fontface = "bold", 
+                  size=5,color="grey30",max.overlaps=Inf) +
+  annotate("point", x = df_poc$Long, y = df_poc$Lat, colour = "blue",size=7)+
+  annotate("point",x=119.9,y=21.6,color="red",size=7)+
+  annotate("point",x=120.3,y=22.0,color="green",size=7)+
+  theme_bw()
+
+```
+
+<font size="4"> 
+**Caption:** 
+1) Depth v.s. TOU.
+2) In situ temperature v.s. TOU.
+3) Bar plot of mean TOU of each station with standard deviation.
+</font>
+
+
+```{r}
+#fill NA value with mean value from the same station####
+TOU$Clay[is.na(TOU$Clay)==T&TOU$Station=="GC1"]<-12.49412
+TOU$Clay[is.na(TOU$Clay)==T&TOU$Station=="GS1"]<-22.92222
+TOU$Clay[is.na(TOU$Clay)==T&TOU$Station=="L1"]<-8.75
+TOU$Clay[is.na(TOU$Clay)==T&TOU$Station=="GC3"]<-22.53333
+
+TOU$Silt[is.na(TOU$Silt)==T&TOU$Station=="GC1"]<-47.76471
+TOU$Silt[is.na(TOU$Silt)==T&TOU$Station=="GS1"]<-74.12222
+TOU$Silt[is.na(TOU$Silt)==T&TOU$Station=="L1"]<-68.75
+TOU$Silt[is.na(TOU$Silt)==T&TOU$Station=="GC3"]<-65.92333
+
+TOU$Sand[is.na(TOU$Sand)==T&TOU$Station=="GC1"]<-39.74118
+TOU$Sand[is.na(TOU$Sand)==T&TOU$Station=="GS1"]<-2.955556
+TOU$Sand[is.na(TOU$Sand)==T&TOU$Station=="L1"]<-22.5
+TOU$Sand[is.na(TOU$Sand)==T&TOU$Station=="GC3"]<-11.54333
+
+TOU$CN[is.na(TOU$CN)==T&TOU$Station=="GC1"]<-9.551817
+TOU$CN[is.na(TOU$CN)==T&TOU$Station=="GS1"]<-9.955464
+TOU$CN[is.na(TOU$CN)==T&TOU$Station=="L1"] <-13.68226
+TOU$CN[is.na(TOU$CN)==T&TOU$Station=="GC3"]<-10.02279
+
+TOU$TOC[is.na(TOU$TOC)==T&TOU$Station=="GC1"]<-6.192887
+TOU$TOC[is.na(TOU$TOC)==T&TOU$Station=="GS1"]<-6.090248
+TOU$TOC[is.na(TOU$TOC)==T&TOU$Station=="L1"] <-11.65578
+TOU$TOC[is.na(TOU$TOC)==T&TOU$Station=="GC3"]<-6.047289
+
+TOU$TN[is.na(TOU$TN)==T&TOU$Station=="GC1"]<-6.026109
+TOU$TN[is.na(TOU$TN)==T&TOU$Station=="GS1"]<-5.800928
+TOU$TN[is.na(TOU$TN)==T&TOU$Station=="L1"] <-11.51224
+TOU$TN[is.na(TOU$TN)==T&TOU$Station=="GC3"]<-0.1188548
+#####
+
+TOU <-TOU %>% filter(Station!='FS5C')
+library(ggplot2)
+TOU%>% 
+  ggplot(aes(x = Depth, y = -In_situ_DO_flux))+
+  geom_point(aes(color=Region,shape=Region))+
+  facet_wrap(~Habitat,scale="free_x")+
+  scale_y_log10()+
+  stat_smooth(method="lm", formula=y~x, alpha=0.2)+
+  ylab(expression(Oyxgen~flux~(mmol~m^-2~day^-1)))+
+  xlab("Depth (m)")+
+  theme_bw()
+
+TOU%>% 
+  ggplot(aes(x =In_situ_temperature , y = -In_situ_DO_flux))+
+  geom_point(aes(color=Region,shape=Region))+
+  facet_wrap(~Habitat,scale="free_x")+
+  scale_y_log10()+
+  stat_smooth(method="lm", formula=y~x, alpha=0.2)+
+  ylab(expression(Oyxgen~flux~(mmol~m^-2~day^-1)))+  
+  xlab("Temperature (°C)")+
+  theme_bw()
+
+TOU_stat<-TOU %>% group_by(Region,Habitat,Station) %>% 
+  summarise(mean_TOU=mean(In_situ_DO_flux),
+            sd_TOU=sd(In_situ_DO_flux))
+
+TOU_stat %>% 
+  ggplot(aes(x=Station,y=-mean_TOU))+
+  geom_bar(aes(fill =Region),
+           stat = "identity",
+           position = position_dodge(),width = 0.6)+
+  facet_wrap(~Habitat,scales = "free_x")+
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))+
+  geom_errorbar(aes(ymin = -(mean_TOU - sd_TOU), ymax = -(mean_TOU + sd_TOU)), width = 0.1)+
+  geom_point(data=TOU,aes(x=Station,y=-In_situ_DO_flux), color = "darkblue",size=1,position = position_jitter(0.1))+
+  ylab(expression(Oyxgen~flux~(mmol~m^-2~day^-1)))+
+  theme_bw()
+#####
+
+```
+
+
+<font size="4"> 
+**Caption:** 
+PERMDISP and PERMANOVA: check if significant difference exist between 
+1)(discrete) TOU v.s. Station: PERMDISP(no s.d.), PERMANOVA (s.d.)
+2)(discrete) TOU v.s. Habitat: PERMDISP(s.d.), PERMANOVA (s.d.)
+3)(discrete) TOU v.s. Region:  PERMDISP(s.d.), PERMANOVA (s.d.)
+
+4)(continuous) TOU v.s. Depth:   PERMDISP(no s.d.), PERMANOVA (s.d.)
+
+</font>
+
+```{r}
+library(vegan)
+set.seed(100)
+#check variance:PERMDISP####
+#1 calculate distance
+tou_dist<-vegdist(TOU$In_situ_DO_flux,method = "euclidean")
+#2 group->calculate data dispersion:Station
+beta_station<-betadisper(tou_dist,group = TOU$Station)
+#3 permutation grouping and calculate variance difference
+permu_station<-permutest(beta_station,permutations = 9999)
+permu_station #nosd
+
+#2 group->calculate data dispersion:Habitat
+beta_habitat<-betadisper(tou_dist,group = TOU$Habitat)
+#3 permutation grouping and calculate variance difference
+permu_habitat<-permutest(beta_habitat,permutations = 9999)
+permu_habitat#sd
+
+#2 group->calculate data dispersion:Region
+beta_region<-betadisper(tou_dist,group = TOU$Region)
+#3 permutation grouping and calculate variance difference
+permu_region<-permutest(beta_region,permutations = 9999)
+permu_region#sd
+
+#2 group->calculate data dispersion:Depth
+beta_depth<-betadisper(tou_dist,group = TOU$Depth)
+#3 permutation grouping and calculate variance difference
+permu_depth<-permutest(beta_depth,permutations = 9999)
+permu_depth#nosd
+
+#PERMANOVA####
+permanova_tou.hab<-adonis2(TOU$In_situ_DO_flux~Habitat,
+                       data = TOU, permutations = 9999,
+                       method = "euclidean",sqrt.dist = F)
+permanova_tou.hab#sd
+permanova_tou.stat<-adonis2(TOU$In_situ_DO_flux~Station,
+                       data = TOU, permutations = 9999,
+                       method = "euclidean",sqrt.dist = F)
+permanova_tou.stat#sd
+permanova_tou.reg<-adonis2(TOU$In_situ_DO_flux~Region,
+                       data = TOU, permutations = 9999,
+                       method = "euclidean",sqrt.dist = F)
+permanova_tou.reg#sd
+permanova_tou.dep<-adonis2(TOU$In_situ_DO_flux~Depth,
+                       data = TOU, permutations = 9999,
+                       method = "euclidean",sqrt.dist = F)
+permanova_tou.dep#sd
+
+```
+
+<font size="4"> 
+**Caption:** 
+Pearson's correlation: if linear relationship exists between TOU and other variables. Coefficient values are shown in each block corresponding to the related variables. The ones with background color have p-value < 0.05. The background color indicates the coefficient value between -1 and 1.
+
+
+</font>
+```{r}
+library(corrplot)
+TOU_cor<-TOU[2:12]
+TOU_cor$Station<-as.numeric(as.factor(TOU$Station))
+TOU_cor$Habitat<-as.numeric(as.factor(TOU$Habitat))
+TOU_cor$Region<-as.numeric(as.factor(TOU$Region))
+cor<-cor(TOU_cor)
+testRes<-cor.mtest(TOU_cor, conf.level = 0.95)
+corrplot(cor, p.mat = testRes$p, type = "lower",
+         addCoef.col ='black', number.cex = 0.8, 
+         order = 'AOE', diag=FALSE)
+```
+
+<font size="4"> 
+**Caption:** 
+PCA analysis 
+
+</font>
+
+
+```{r}
+library(vegan)
+library(ggfortify)
+library(factoextra)
+library(emmeans)
+library(FactoMineR)
+TOU_pca<-TOU[2:12]
+TOU_pca$Station<-as.numeric(as.factor(TOU$Station))
+TOU_pca$Habitat<-as.numeric(as.factor(TOU$Habitat))
+TOU_pca$Region<-as.numeric(as.factor(TOU$Region))
+tou.pca<-PCA(TOU_pca)
+fviz_eig(tou.pca,addlabels = TRUE, ylim = c(0, 50))#Visualize the eigenvalues
+fviz_contrib(tou.pca, choice = "var", axes = 1,top=5)#top5 variable contribute to PC1
+fviz_contrib(tou.pca, choice = "var", axes = 1:2,top=5)#total contribution to PC1&2
+fviz_pca_var(tou.pca,col.var = "black")# Visualize the results variables
+#individual results
+ind<-get_pca_ind(tou.pca)
+#individuals that are similar are grouped together on the plot
+#individuals colored by groups
+fviz_pca_ind(tou.pca,
+             geom.ind = "point", # show points only (nbut not "text")
+             col.ind = TOU$Habitat, # color by groups
+             palette = c("#00AFBB", "#E7B800", "#FC4E07"),
+             addEllipses = TRUE, # Concentration ellipses
+             legend.title = "Groups"
+)
+# Add confidence ellipses
+fviz_pca_ind(tou.pca, geom.ind = "point", col.ind = TOU$Region, 
+             palette = c("#00AFBB", "#E7B800", "#FC4E07","#868686FF","green"),
+             legend.title = "Groups")
+#biplot
+fviz_pca_biplot(tou.pca, 
+                col.ind = TOU$Habitat, 
+                palette = c("#00AFBB", "#E7B800", "#FC4E07"), 
+                addEllipses = TRUE, label = "var",
+                col.var = "black", repel = TRUE,
+                legend.title = "Habitat") 
+
+```
+
+<font size="4"> 
+**Caption:** 
+NMDS
+</font>
+```{r}
+#nmds
+TOU_nmds<-TOU[2:12]
+TOU_nmds$Station<-as.numeric(as.factor(TOU$Station))
+TOU_nmds$Habitat<-as.numeric(as.factor(TOU$Habitat))
+TOU_nmds$Region<-as.numeric(as.factor(TOU$Region))
+set.seed(100)
+nmds<-metaMDS(TOU_nmds,distance = "bray",k=2)
+stressplot(nmds,main = "Shepard plot")
+
+nmds.df<-scores(nmds) %>% 
+  as_tibble(rownames="samples")
+TOU$samples<-as.character(c(1:nrow(TOU)))
+nmds.df<-inner_join(nmds.df,TOU,by="samples")
+ggplot(data=nmds.df,aes(x=NMDS1,y=NMDS2,
+                        color=Habitat))+
+  geom_point()+
+  stat_ellipse(geom = "polygon",aes(group=Habitat,fill=Habitat), alpha = 0.3) +
+  annotate("text", x = -2, y = 0.95, label = paste0("stress: ", format(nmds$stress, digits = 4)), hjust = 0)
+
+```

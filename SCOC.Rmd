@@ -1,0 +1,537 @@
+---
+title: "Sediment Oxygen Consumption"
+author: "Chih-Lin Wei"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+```
+
+
+Obtain the initial and 85% of the initial DO concentration
+---
+
+```{r}
+library(ggplot2)
+library(doBy)
+library(reshape2)
+library(scales)
+library(plyr)
+library(readxl)
+library(knitr)
+library(TWBathyMap)
+
+# dark theme for ggplot
+dark <- theme(plot.background = element_rect(colour = 'NA', fill = 'gray10'),
+        panel.background = element_rect(colour = 'NA', fill = 'transparent'),
+        legend.background = element_rect(colour = 'NA', fill = 'transparent'),
+        legend.title = element_text(colour = 'white'),
+        legend.text = element_text(colour = 'white'),
+        axis.title = element_text(colour = 'white'),
+        axis.text = element_text(colour = 'white'),
+        axis.ticks = element_line(colour = 'white'),
+        panel.border = element_rect(fill = 'NA', colour = 'white'), 
+        panel.grid.major = element_line(colour = 'gray30'),
+        panel.grid.minor = element_line(colour = 'gray20'))
+
+# Load data
+ic <- read_excel("../GPSC_data/GPSC_incubation/GPSC_incubation_2021.12.29.xlsx", sheet=1)
+ic <- ic[!is.na(ic$DO),]
+ic <- ic[-grep("Bad", ic$Comment),]
+
+# Remove OR1_1126 GC1, GS3, GS4 because it's show very large flux and only based on 2 points
+# Remove OR1_1114 GC1 because it's show extremely large flux
+# Remove OR1_1151 because it's show extremely low faunal abundance
+bad1 <- with(ic, Cruise=="OR1_1114" & Station=="GC1")
+bad2 <- with(ic, Cruise=="OR1_1126" & (Station=="GC1"|Station=="GS3"|Station=="GS4"))
+#bad3 <- with(ic, Cruise=="OR1_1151")
+water <- with(ic, Sample=="W")
+ic <- ic[!(bad1|bad2|water), ]
+
+ic$DateTime <- as.POSIXct(paste(ic$Date, ic$Time, sep=" "), tz="Asia/Taipei")
+ic$Region <- factor(ic$Station)
+levels(ic$Region) <- c(rep("Fangliao", 7), rep("Gaoping", 13), rep("Kaohsiung", 2), rep("Gaoping", 9), rep("Kaohsiung", 2), rep("Dongsha", 2), rep("Taiping", 2))
+
+# Initial concentration and 85% of intial concentration for sediment incubation
+in_conc <- splitBy(~Cruise+Station+Deployment+Tube, as.data.frame(ic))
+in_conc <- lapply(in_conc, FUN=function(x){
+  Cruise <- x$Cruise[1]
+  Station <- x$Station[1]
+  Deployment <- x$Deployment[1]
+  Tube <- x$Tube[1]
+  Habitat <- x$Habitat[1]
+  Initial <- x$DO[1]
+  LL85 <- x$DO[1]*0.85
+  data.frame(Cruise, Station, Deployment, Tube, Habitat, Initial, LL85)
+  })
+in_conc <- do.call(rbind, in_conc)
+```
+
+```{r, fig.width=8, fig.height=6}
+library(swtmap)
+library(maptools)
+library(raster)
+
+loc <- read_excel("../GPSC_data/GPSC_macro_sorting/GPSC_macro_sorting_2021.11.23.xlsx", sheet=1)
+all <- summaryBy(Longitude+Latitude+Depth~Station+Habitat, data=as.data.frame(loc), FUN=mean, keep.names=TRUE)
+loc <- all[match(unique(ic$Station), all$Station),]
+coordinates(loc) <- c("Longitude", "Latitude")
+projection(loc) <- projection(bathy)
+
+e <- extent(119.8, 120.9, 21.6, 22.6)
+r <- crop(bathy, e)
+iso200<- rasterToContour(r, levels=-200)
+iso1000<- rasterToContour(r, levels=c(-3000, -2000, -1000, 0))
+extra <- function(...){
+         panel.levelplot.raster(...)
+         sp.lines(iso200, col="gray30", lty=2)
+         sp.lines(iso1000, col="gray30")
+         sp.points(loc, cex=1.5, pch=21, fill=c("black", "white")[factor(loc$Habitat)], col="black")
+         sp.pointLabel(loc, labels=loc$Station)
+         SpatialPolygonsRescale(layout.scale.bar(), offset=c(120.6, 21.65), scale = 30/(111.321*cos(21.65*pi/180)), fill = c("white","black"), col = "black")
+         sp.text(loc = c(120.62, 21.68), "0")
+         sp.text(loc = c(120.85, 21.68), "30 km")
+}
+
+tbspplot(r, panel=extra)
+```
+
+
+Linear regression between DO and time
+---
+- Dashed line: 85% DO of the initial concentration
+- Close symbol: Sediment incubation
+- Open symbol: Bottom water incubation
+
+```{r, fig.width=10, fig.height=8}
+do_ls<-splitBy(~Cruise+Station+Deployment+Tube, as.data.frame(ic))
+do_ls<-lapply(do_ls, FUN=function(x){
+  x$Elapse <- (x$DateTime-min(x$DateTime))/3600
+  return(x)
+  })
+ic <- ldply(do_ls, rbind)
+
+flux_fun <- function(x){
+  fit <- lm(DO~Elapse, x)
+  oxy <- fit$coefficient[2]*24 # mmol/L/day
+  vol <- (x$Height[1]*5.25^2*pi)/1000 # L
+  are <- 5.25^2*pi/10000 # m2
+  DO_flux <- oxy*vol/are/1000 # mmol/m2/d
+  a <- fit$coefficient[1]
+  b <- fit$coefficient[2]
+  P <- summary(fit)$coefficient[2,4]
+  Date <- x$Date[1]
+  Habitat <- x$Habitat[1]
+  Region <- x$Region[1]
+  Depth <- x$Depth[1]
+  Cruise <- x$Cruise[1]
+  Station <- x$Station[1]
+  Deployment <- x$Deployment[1] 
+  Tube <- x$Tube[1]
+  Sample <- x$Sample[1]
+  Incubator <- x$Incubator[1]
+  Temperature <- mean(x$Temperature)
+  data.frame(Cruise, Date, Habitat, Region, Depth, Station, Deployment, Tube, Sample, Incubator, a, b, P, DO_flux, Temperature)
+}
+
+do_fx <- lapply(do_ls, FUN=flux_fun)
+do_fx<-do.call(rbind, do_fx)
+
+lev <- c("SC2", "SC3","KS1", "KS3",
+         "GC1", "GC2", "GC3", "GC4", "GC5", "GC6",
+         "S1", "S2", "S3", "S4", "S5", "S6", "S7", "GS1", "GS2", "GS3", "GS4", "GS5", "GS6", "GS7", "M1", "L1",
+         "FC1", "FC2", "FC4", "FC5A","FS1", "FS2", "FS5C",
+         "ST1", "ST3", "ST5", "ST5-2")
+
+do_fx$Station <- factor(do_fx$Station, levels=lev)
+ic$Station <- factor(ic$Station, levels = lev)
+
+# DO as function of time
+ggplot(data=ic, aes(x=Elapse, y=DO, colour=Cruise))+
+  #geom_hline(data=in_conc, aes(yintercept=LL85, colour=Cruise), lty=2)+
+  geom_point()+
+  scale_shape_manual(values=c(19,1))+
+  geom_abline(data=do_fx, aes(intercept=a, slope=b, colour=Cruise))+
+  facet_wrap(~Station, scale="free")+
+  xlab("Incubation time (hour)")+
+  ylab(expression(Dissolved~ooxygen~concentration(mu~mol/L)))+
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) #%+replace% dark
+```
+
+Apply Q10 (=2, Valiela, 1995) adjustment with in-situ CTD data
+---
+```{r}
+# In-situ temperature from CTD
+ctd <- read_excel("../GPSC_data/GPSC_CTD/GPSC_CTD_2021.12.29.xlsx", sheet=1)
+ctd <- splitBy(~Cruise+Station, as.data.frame(ctd))
+
+# Function to get average of bottom 3 deepest CTD data
+deep_fun <- function(x) {
+   dat <- x[order(x$pressure, decreasing=TRUE)[1:3],]
+   summaryBy(.~Cruise+Station, data=dat, keep.names=TRUE, na.rm=TRUE)
+}
+ctd <- lapply(ctd, FUN=deep_fun)
+ctd <- ldply(ctd)[, -1]
+
+# Average temperature
+ctd$Temperature <- rowMeans(ctd[, c("temperature_T1", "temperature_T2")], na.rm=TRUE)
+id1 <- with(do_fx, paste(Cruise, Station))
+id2 <- with(ctd, paste(Cruise, Station))
+
+# Set OR1_1190 GS6 temperature to the temperature measured during OR1 1169
+id1[is.na(match(id1, id2))] <- c("OR1_1169 GS6")
+do_fx$In_situ_temperature <- ctd[match(id1, id2), "Temperature"]
+
+# Q10 function
+q10_fun <- function(t1, t2, r1, q10){
+  a <- 10/(t1-t2)
+  r1/(q10^(1/a))
+}
+
+do_fx$In_situ_DO_flux <- q10_fun(t1=do_fx$Temperature, t2=do_fx$In_situ_temperature, r1=do_fx$DO_flux, q10=2)
+```
+
+In-situ oxygen flux by core replications
+```{r}
+# Fit a log-linear model
+f <- lm(log10(-In_situ_DO_flux)~Depth*Habitat*Region, data=subset(do_fx, !(Region=="Dongsha"|Region=="Taiping")))
+summary(f)
+anova(f)
+
+ls <- splitBy(~Habitat, data=do_fx)
+f<-lapply(ls, FUN=function(x)lm(log10(-In_situ_DO_flux)~Depth, data=x))
+lapply(f, FUN=summary)
+nd <- lapply(ls, FUN=function(x){
+  out <- as.data.frame(seq(min(x$Depth), max(x$Depth)))
+  names(out) <- "Depth"
+  return(out)
+})
+
+fnd <- list(Canyon=list(f=f[[1]], nd=nd[[1]]), Slope=list(f=f[[2]], nd=nd[[2]]))
+pred <- lapply(fnd, FUN=function(x)cbind(x$nd, -10^predict(x$f, x$nd, interval="confidence")))
+pred <- ldply(pred, rbind)
+names(pred)[1] <- "Habitat"
+
+ggplot(data=do_fx, 
+             aes(x = Depth, y = In_situ_DO_flux))+
+  geom_point(aes(colour=Habitat, shape=Region), size=3)+
+  scale_shape_manual(values=c(19, 3, 4, 1, 0))+
+  geom_line(data=pred, aes(x=Depth, y=fit, colour=Habitat))+
+  geom_ribbon(data=pred, aes(x=Depth, y=fit, ymin=lwr, ymax=upr, fill=Habitat), alpha=0.2)+
+  facet_wrap(~Habitat, scale="free")+
+  xlab("Depth (m)")+
+  ylab(expression(Oyxgen~flux~(mmol~m^-2~day^-1)))+
+  theme_bw() #%+replace% dark
+
+ggplot(data=do_fx, 
+             aes(x = Depth, y = -In_situ_DO_flux))+
+  geom_point(aes(colour=Habitat, shape=Region), size=3)+
+  scale_shape_manual(values=c(19, 3, 4, 1, 0))+
+  scale_y_log10()+
+  stat_smooth(method="lm", formula=y~x, alpha=0.2, aes(colour=Habitat, fill=Habitat))+
+  facet_wrap(~Habitat, scale="free")+
+  xlab("Depth (m)")+
+  ylab(expression(Total~Oxygen~Utilization~(mmol~m^-2~day^-1)))+
+  theme_bw() #%+replace% dark
+
+ggplot(data=do_fx, 
+             aes(x = Depth, y = -In_situ_DO_flux))+
+  geom_point(aes(colour=Habitat, shape=Region), size=3)+
+  scale_shape_manual(values=c(19, 3, 4, 1, 0))+
+  scale_y_log10()+
+  stat_smooth(method="lm", formula=y~x, alpha=0.2, colour="gray")+
+  xlab("Depth (m)")+
+  ylab(expression(Total~Oxygen~Utilization~(mmol~m^-2~day^-1)))+
+  theme_bw() #%+replace% dark
+
+or <- with(do_fx, 
+           order(Sample, Cruise, Station, Deployment))
+#write.csv(do_fx[or,], file="../GPSC_data/GPSC_incubation/GPSC_TOU.csv", row.names=F, na = "")
+#write.csv(summaryBy(DO_flux+In_situ_DO_flux~Cruise+Station, data=do_fx[or,], FUN=c(mean, sd, length)), file="../GPSC_data/GPSC_incubation/GPSC_TOU_st.csv", row.names=F, na = "")
+```
+
+Average in-situ Oxygen flux by cruise and station
+---
+```{r}
+do_fx_summary <- summaryBy(In_situ_DO_flux+Depth~Cruise+Habitat+Region+Station, data=do_fx, FUN=c(mean, sd, length))
+
+
+ggplot(do_fx_summary, aes(x = Station, y = In_situ_DO_flux.mean, fill=Habitat))+
+  geom_bar(stat = "identity")+
+  geom_errorbar(aes(x=Station, ymin=In_situ_DO_flux.mean-In_situ_DO_flux.sd, ymax=In_situ_DO_flux.mean, colour=Habitat))+
+  facet_wrap(~Cruise, scale="free_x")+
+  ylab(expression(Oyxgen~flux~(mmol~m^-2~day^-1)))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) #%+replace% dark
+
+# Fit a log-linear model
+f <- aov(log10(-In_situ_DO_flux.mean)~Depth.mean*Habitat*Region, data=subset(do_fx_summary, !(Region=="Dongsha"|Region=="Taiping")))
+summary(f)
+TukeyHSD(f, "Region")
+
+ls <- splitBy(~Habitat, data=do_fx_summary)
+f<-lapply(ls, FUN=function(x)lm(log10(-In_situ_DO_flux.mean)~Depth.mean, data=x))
+lapply(f, FUN=summary)
+nd <- lapply(ls, FUN=function(x){
+  out <- as.data.frame(seq(min(x$Depth.mean), max(x$Depth.mean)))
+  names(out) <- "Depth.mean"
+  return(out)
+})
+
+fnd <- list(Canyon=list(f=f[[1]], nd=nd[[1]]), Slope=list(f=f[[2]], nd=nd[[2]]))
+pred <- lapply(fnd, FUN=function(x)cbind(x$nd, -10^predict(x$f, x$nd, interval="confidence")))
+pred <- ldply(pred, rbind)
+names(pred)[1] <- "Habitat"
+
+ggplot()+
+  geom_point(data=do_fx_summary, aes(x = Depth.mean, y = In_situ_DO_flux.mean, colour=Habitat, shape=Region), size=3)+
+  scale_shape_manual(values=c(19, 3, 4, 1, 0))+
+  geom_errorbar(data=do_fx_summary, aes(x=Depth.mean, ymin=In_situ_DO_flux.mean-In_situ_DO_flux.sd, ymax=In_situ_DO_flux.mean+In_situ_DO_flux.sd, colour=Habitat))+
+  geom_line(data=pred, aes(x=Depth.mean, y=fit, colour=Habitat))+
+  geom_ribbon(data=pred, aes(x=Depth.mean, y=fit, ymin=lwr, ymax=upr, fill=Habitat), alpha=0.2)+
+  facet_wrap(~Habitat, scales="free")+
+  xlab("Depth (m)")+
+  ylab(expression(Oyxgen~flux~(mmol~m^-2~day^-1)))+
+  theme_bw() #%+replace% dark
+
+ggplot(data=do_fx_summary, 
+       aes(x = Depth.mean, y = -In_situ_DO_flux.mean,
+           ymin=-In_situ_DO_flux.mean-In_situ_DO_flux.sd,
+           ymax=-In_situ_DO_flux.mean+In_situ_DO_flux.sd,
+           colour=Habitat, fill=Habitat, group=Habitat, shape=Region))+
+  geom_point(size=3)+
+  scale_shape_manual(values=c(19, 3, 4, 1, 0))+
+  scale_y_log10()+
+  geom_errorbar()+
+  stat_smooth(method="lm", formula=y~x, alpha=0.2)+
+  facet_wrap(~Habitat, scales="free")+
+  xlab("Depth (m)")+
+  ylab(expression(Total~Oyxgen~Utilization~(mmol~m^-2~day^-1)))+
+  theme_bw() #%+replace% dark
+
+ggplot(data=do_fx_summary)+
+  geom_point(size=3, aes(x = Depth.mean, y = -In_situ_DO_flux.mean, colour=Habitat, shape=Region))+
+  scale_shape_manual(values=c(19, 3, 4, 1, 0))+
+  scale_y_log10()+
+  geom_errorbar(aes(x = Depth.mean, y = -In_situ_DO_flux.mean,
+           ymin=-In_situ_DO_flux.mean-In_situ_DO_flux.sd,
+           ymax=-In_situ_DO_flux.mean+In_situ_DO_flux.sd, colour=Habitat))+
+  stat_smooth(method="lm", formula=y~x, alpha=0.2, colour="gray", aes(x = Depth.mean, y = -In_situ_DO_flux.mean))+
+  xlab("Depth (m)")+
+  ylab(expression(Total~Oyxgen~Utilization~(mmol~m^-2~day^-1)))+
+  theme_bw() #%+replace% dark
+
+summaryBy(In_situ_DO_flux.mean~Habitat, data=do_fx_summary, FUN=c(mean, sd, length))
+
+```
+
+
+Average in-situ carbon flux
+---
+```{r}
+ggplot(do_fx_summary, aes(x = Station, y = In_situ_DO_flux.mean*(-1)*12, fill=Habitat))+
+  geom_bar(stat = "identity")+
+  geom_errorbar(aes(x=Station, y=In_situ_DO_flux.mean*(-1)*12, ymax=In_situ_DO_flux.mean*(-1)*12+In_situ_DO_flux.sd*(1)*12, ymin=In_situ_DO_flux.mean*(-1)*12, colour=Habitat))+
+  facet_wrap(~Cruise, scale="free_x")+
+  ylab(expression(Carbon~flux~(mg~C~m^-2~day^-1)))+
+  #labs(title="Sediment Community Carbon Remineralization Rate")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) #%+replace% dark
+
+do_fx_summary$DO_flux <- do_fx_summary$In_situ_DO_flux.mean
+do_fx_summary$C_flux <- do_fx_summary$In_situ_DO_flux.mean*(-1)*12
+do_fx_summary$DO_flux_sd <- do_fx_summary$In_situ_DO_flux.sd
+do_fx_summary$C_flux_sd <- do_fx_summary$In_situ_DO_flux.sd*(1)*12
+long <- melt(do_fx_summary, measure.vars = c("DO_flux", "C_flux"))
+long2 <- melt(do_fx_summary, measure.vars=c("DO_flux_sd", "C_flux_sd"))
+long$value_sd <- long2$value
+long$variable
+
+pred$variable <- "DO_flux"
+pred2 <- pred
+pred2[, 3:5] <- pred2[, 3:5]*(-1)*12
+pred2$variable <- "C_flux"
+pred_comb <- rbind(pred, pred2)
+pred_comb$variable <- factor(pred_comb$variable, levels=c("DO_flux", "C_flux"))
+
+ggplot(data=long, aes(x=Depth.mean, y=value))+
+  geom_point(size=3, aes(colour=Habitat, shape=Region))+
+  scale_shape_manual(values=c(19, 3, 4, 1, 0))+
+  geom_errorbar(aes(x=Depth.mean, y=value, ymin=value-value_sd, ymax=value+value_sd, colour=Habitat))+
+  geom_line(data=pred_comb, aes(x=Depth.mean, y=fit, colour=Habitat))+
+  geom_ribbon(data=pred_comb, aes(x=Depth.mean, y=fit, ymin=lwr, ymax=upr,fill=Habitat), alpha=0.2)+
+  facet_wrap(~variable, scale="free_y")+
+  xlab("Depth (m)")+
+  ylab(expression(Flux~(mmol~Oxygen~m^-2~day^-1)~or~(mg~Carbon~m^-2~day^-1)))+
+  #labs(title="Sediment Community Oxygen Consumption Rate")+
+  theme_bw() #%+replace% dark
+```
+
+```{r}
+station_mean <- summaryBy(DO_flux+C_flux+In_situ_DO_flux.length+Depth.mean~Region+Habitat+Station, data=do_fx_summary, FUN=c(mean, sd, length, sum))
+station_mean <- station_mean[, c("Region", "Habitat", "Station", "Depth.mean.mean", "DO_flux.mean", "DO_flux.sd", "C_flux.mean", "C_flux.sd", "DO_flux.length", "In_situ_DO_flux.length.sum")]
+names(station_mean) <- c("Region", "Habitat", "Station", "Depth", "DO_flux.mean", "DO_flux.sd", "C_flux.mean", "C_flux.sd", "# of cruise", "# of incubation")
+
+lev <- c("SC2", "SC3","KS1", "KS3",
+         "GC1", "GC2", "GC3", "GC4", "GC5", "GC6",
+         "S1", "S2", "S3", "S4", "S5", "S6", "S7", "GS1", "GS2", "GS3", "GS4", "GS5", "GS6", "GS7","M1", "L1",
+         "FC1", "FC2", "FC4", "FC5A","FS1", "FS2", "FS5C",
+         "ST1", "ST3", "ST5", "ST5-2")
+
+station_mean$Station <- factor(station_mean$Station, levels = lev)
+station_mean$Region <- factor(station_mean$Region, levels = c("Kaohsiung", "Gaoping", "Fangliao", "Dongsha", "Taiping"))
+
+cord <- coordinates(loc)[match(station_mean$Station, loc$Station),]
+kable(cbind(cord, station_mean), align="c")
+```
+
+```{r, fig.width=12, fig.height=6}
+library(cowplot)
+
+p1 <- ggplot(station_mean, 
+       aes(x = Station, y = DO_flux.mean, ymin=DO_flux.mean-DO_flux.sd, ymax=DO_flux.mean, colour=Habitat, fill=Habitat))+
+  geom_bar(stat = "identity")+
+  geom_errorbar()+
+  ylab(expression(Oyxgen~flux~(mmol~m^-2~day^-1)))+
+  scale_y_reverse()+
+  #labs(title="Sediment Community Carbon Remineralization Rate")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) #%+replace% dark
+
+p2 <- ggplot(station_mean, 
+       aes(x = Station, y = C_flux.mean, ymax=C_flux.mean+C_flux.sd, ymin=C_flux.mean, colour=Habitat, fill=Habitat))+
+  geom_bar(stat = "identity")+
+  geom_errorbar()+
+  ylab(expression(Carbon~flux~(mg~C~m^-2~day^-1)))+
+  #labs(title="Sediment Community Carbon Remineralization Rate")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) #%+replace% dark
+
+plot_grid(p1, p2, ncol=1, align = "h", axis="b")
+```
+
+# Match SCOC to environmental data
+```{r, fig.width=10, fig.height=8, eval=FALSE}
+# CTD data
+ctd <- as.data.frame(read_excel("../GPSC_data/GPSC_CTD/GPSC_CTD_2021.08.15.xlsx", sheet=1))
+ctd <- splitBy(~Cruise+Station, ctd)
+
+# Function to get average of bottom 3 deepest CTD data
+deep_fun <- function(x) {
+   dat <- x[order(x$pressure, decreasing=TRUE)[1:3],]
+   summaryBy(.~Cruise+Station, data=dat, keep.names=TRUE, na.rm=TRUE)
+}
+
+ctd <- lapply(ctd, FUN=deep_fun)
+ctd <- ldply(ctd)[, -1]
+ctd$transmissometer[ctd$transmissometer<=0] <- 0 # Set negtive transmissometer to zero
+
+# Average temperature, sigma_theta and density
+ctd$Temperature <- rowMeans(ctd[, c("temperature_T1", "temperature_T2")], na.rm=TRUE)
+ctd$Salinity <- rowMeans(ctd[, c("salinity_T1C1", "salinity_T2C2")], na.rm=TRUE)
+ctd$Sigma_theta <- rowMeans(ctd[, c("density_T1C1...11", "density_T2C2...12")], na.rm=TRUE)
+ctd$Density <- rowMeans(ctd[, c("density_T1C1...13", "density_T2C2...14")], na.rm=TRUE)
+
+id1 <- with(ctd, paste(Cruise, Station))
+id2 <- with(do_fx, paste(Cruise, Station))
+# Fill station with no CTD data
+id2[id2=="OR1_1190 FC2A"] <- "OR1_1190 FC2"
+id2[id2=="OR1_1190 GS6"] <- "OR1_1138 GS6"
+ctd <- ctd[match(id2, id1), ]
+head(ctd)
+
+# Sediment data
+col_types <- c(rep("text", 2), "numeric", "text", rep("numeric", 16))
+sed <- as.data.frame(read_excel("../GPSC_data/GPSC_sediment/GPSC_sediment_2021.06.21.xlsx", sheet=1, col_types=col_types))
+sed <- sed[sed$Section=="0-1"|sed$Section=="0-1.5",]
+
+id1 <- with(sed, paste(Cruise, Station))
+id2 <- with(do_fx, paste(Cruise, Station))
+# Fill station with no CTD data
+id2[id2=="OR1_1190 FS5C"] <- "OR1_1190 FS5B"
+sed <- sed[match(id2, id1), ]
+
+# Profiling data
+fx <- read.csv("../GPSC_data/GPSC_o2_profile/GPSC_DOU.csv")
+fx <- summaryBy(Integrated_Prod~Cruise+Station, data=fx, keep.names=TRUE)
+id1 <- with(fx, paste(Cruise, Station))
+id2 <- with(do_fx, paste(Cruise, Station))
+fx <- fx[match(id2, id1), ]
+
+# Prokaryote data
+bac <- read_excel("../GPSC_data/GPSC_bact/GPSC_bacteria_count_OR1-1190.xlsx", sheet=1, skip=1, n_max=10)[,-1]
+bac <- melt(bac)
+bac$Bac_abun <- bac$value*133884.298
+fro <- ldply(strsplit(as.character(bac$variable), split="-"))
+names(fro) <- c("Station", "Deployment", "Tube")
+bac <- cbind(fro, bac)
+bac$Cruise <- "OR1_1190"
+# Convert to biomass (ug ml-1) (assuming 10 fgC cell-1, Deming & Capenter 2008)
+bac$Bac_biom <- bac$Bac_abun*10/1E6
+bac <- summaryBy(Bac_abun+Bac_biom~Cruise+Station, data=bac, keep.names=TRUE)
+id1 <- with(bac, paste(Cruise, Station))
+id2 <- with(do_fx, paste(Cruise, Station))
+bac <- bac[match(id2, id1), ]
+
+# Macrofauna
+# Biomass
+col_types <- c("text", "text", "text", "numeric", "numeric", "text", "text", "text", "text", "text", "text", 
+              "numeric", "numeric", "numeric", "numeric", "numeric", "text")
+mac <- NULL
+for(i in 1:15){
+  d <- read_excel("../GPSC_data/GPSC_macro_size/GPSC_macro_size_2019.04.30.xlsx", sheet=i, col_types=col_types)
+  mac <- rbind(mac, d)
+}
+mac <- as.data.frame(mac)
+mac <- subset(mac, Size<100)
+mac <- summaryBy(Size~Region+Habitat+Cruise+Station+Deployment+Tube, data=mac, FUN=sum)
+mac$log10_Mac_biom <- log10(mac$Size.sum*1.13/0.008659015)
+id1 <- with(mac, paste(Cruise, Station, Tube))
+id2 <- with(do_fx, paste(Cruise, Station, Tube))
+mac <- mac[match(id2, id1), ]
+# Density
+bio <- read.csv("../GPSC_PRIMER/Macro_taxa_by_site.csv")
+id1 <- with(bio, paste(Cruise, Station, Tube))
+id2 <- with(do_fx, paste(Cruise, Station, Tube))
+mac$log10_Mac_abun <- log10(rowSums(bio[,2:33])/0.008659015)[match(id2, id1)]
+
+# Combine environmental data
+env <- cbind(ctd[, c("pressure", "Temperature", "Salinity", "Sigma_theta", "Density", "Oxygen", "fluorometer" , "transmissometer")],
+             DOU=fx$Integrated_Prod*864,
+             bac[, c("Bac_abun", "Bac_biom")],
+             mac[, c("log10_Mac_abun", "log10_Mac_biom")],
+             sed[, c("Clay", "Silt", "Sand", "CN", "TOC", "TN", "WC", "WW", "DW")]
+             )
+row.names(env) <- row.names(do_fx)
+
+# Calculate porosity
+# Pore space volume using pore water mass bottom water density
+# Fill in seawater desnity for sites not having CTD data 
+library(seacarb)
+
+dens <- env$Density
+vp <- (env$WW-env$DW)/(dens/1000)
+# Dry sediment volume assuming density of 2.65 g/cm3 
+vb <- env$DW/2.65
+env$Porosity <- vp/(vp+vb)
+
+long <- melt(cbind(do_fx, env), id.vars=c("In_situ_DO_flux", "Habitat"), measure.vars = c("Depth", "Temperature", "Salinity", "Density", "Oxygen", "fluorometer", "transmissometer", "Bac_biom", "log10_Mac_abun", "log10_Mac_biom", "Clay", "Silt", "Sand", "CN", "TOC", "TN"))
+
+p <- lapply(splitBy(~variable+Habitat, long), FUN=function(x)cor.test(-x$In_situ_DO_flux, x$value)$p.value) %>% unlist()
+
+long2 <- ldply(splitBy(~variable+Habitat, long)[p<0.05])
+
+ggplot(data=long, aes(x=value, y=-In_situ_DO_flux, colour=Habitat))+
+  geom_point()+
+  stat_smooth(data=long2, formula=y~x, method="lm", se=FALSE)+
+  facet_wrap(~variable, scales="free_x")+
+  scale_y_log10()+
+  xlab("")+
+  ylab(expression(Total~Oyxgen~Utilization~(mmol~m^-2~day^-1)))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) %+replace% dark
+```
+

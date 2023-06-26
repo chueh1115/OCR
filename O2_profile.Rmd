@@ -1,0 +1,449 @@
+---
+title: "Oxygen profile"
+author: "Chih-Lin Wei"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+library(doBy)
+library(ggplot2)
+library(reshape2)
+library(readxl)
+```
+
+```{r}
+# dark theme for ggplot
+dark <- theme(plot.background = element_rect(colour = 'NA', fill = 'gray10'),
+        panel.background = element_rect(colour = 'NA', fill = 'transparent'),
+        title = element_text(colour = 'white'),
+        legend.background = element_rect(colour = 'NA', fill = 'transparent'),
+        legend.title = element_text(colour = 'white'),
+        legend.text = element_text(colour = 'white'),
+        axis.title = element_text(colour = 'white'),
+        axis.text = element_text(colour = 'white'),
+        axis.ticks = element_line(colour = 'white'),
+        panel.border = element_rect(fill = 'NA', colour = 'white'), 
+        panel.grid.major = element_line(colour = 'gray30'),
+        panel.grid.minor = element_line(colour = 'gray20'))
+
+large <- theme(legend.title = element_text(size=15),
+        legend.text = element_text(size=15),
+        axis.title = element_text(size=15),
+        axis.text = element_text(size=15),
+        strip.text = element_text(size=15))
+vert_x <- theme(axis.text.x = element_text(angle = 22, hjust = 0.5, face="italic"))
+
+fx <- read.csv("../GPSC_data/GPSC_o2_profile/GPSC_DOU.csv")
+fx$Region <- factor(fx$Region, levels=c("Kaohsiung", "Gaoping", "Fangliao", "Hongtsai", "Penghu", "Formosa", "Dongsha", "Taiping"))
+fx$Station <- factor(fx$Station, levels=c("SC2a", "KS1", "KS2", "KS3", "GC1", "GC3", "GC4", "GC5", "GC6", "S1", "S2", "S3", "S4", "S5", "S6", "L1", "S7", "M1", "GS1", "G96", "GS3", "GS4", "GS5", "GS5B", "GS6", "GS7", "GS10", "FC1", "FC2", "FC2A", "FC3", "FC4", "FS1", "FS2", "FS3", "FS5C", "HC1", "S27", "S27a", "ST3", "ST5"))
+```
+
+```{r, fig.width=8, fig.height=6}
+library(swtmap)
+library(maptools)
+library(raster)
+
+loc <- read_excel("../GPSC_data/GPSC_macro_sorting/GPSC_macro_sorting_2021.11.23.xlsx", sheet=1)
+all <- summaryBy(Longitude+Latitude+Depth~Station+Habitat, data=as.data.frame(loc), FUN=mean, keep.names=TRUE)
+id1 <- unique(fx$Station)
+id2 <- all$Station
+keep <- match(id1, id2)
+loc <- all[keep,]
+loc[which(is.na(keep)),] <- all[all$Station=="SC2",]
+loc[loc$Station=="G96", "Habitat"] <- "Slope"
+coordinates(loc) <- c("Longitude", "Latitude")
+projection(loc) <- projection(bathy)
+
+e <- extent(119.8, 120.9, 21.6, 22.6)
+r <- crop(bathy, e)
+iso200<- rasterToContour(r, levels=-200)
+iso1000<- rasterToContour(r, levels=c(-3000, -2000, -1000))
+extra <- function(...){
+         panel.levelplot.raster(...)
+         sp.lines(iso200, col="gray30", lty=2)
+         sp.lines(iso1000, col="gray30")
+         sp.points(loc, cex=1.5, pch=21, fill=c("black", "white")[factor(loc$Habitat)], col="black")
+         sp.pointLabel(loc, labels=loc$Station)
+         SpatialPolygonsRescale(layout.scale.bar(), offset=c(120.6, 21.65), scale = 30/(111.321*cos(21.65*pi/180)), fill = c("white","black"), col = "black")
+         sp.text(loc = c(120.62, 21.68), "0")
+         sp.text(loc = c(120.85, 21.68), "30 km")
+}
+
+tbspplot(r, panel=extra)
+```
+
+
+```{r, fig.width=10, fig.height=6}
+g <- ggplot(data = summaryBy(In_situ_Integrated_Prod+OPD~Cruise+Station+Habitat+Region, data=fx, FUN=c(mean, sd), na.rm=TRUE))
+
+# Diffusive Oxygen Uptake
+#nmol/cm2/s to mmol/m2/d
+#1e4*3600*24/1e6 = 864
+g+geom_bar(aes(x=Station, y=In_situ_Integrated_Prod.mean*864, group=Cruise, fill=Region, colour=Region), stat="identity", position="dodge")+
+  geom_errorbar(aes(x=Station, y=In_situ_Integrated_Prod.mean*864, ymin=(In_situ_Integrated_Prod.mean-In_situ_Integrated_Prod.sd)*864, ymax=In_situ_Integrated_Prod.mean*864, group=Cruise, colour=Region), position="dodge")+
+  facet_wrap(~Habitat, scales="free_x")+
+  ylab(expression(Diffusive~Oxygen~Uptake~(mmol~m^-2~d^-1)))+
+  theme_bw()+theme(axis.text.x=element_text(angle = 60, hjust = 1)) #%+replace% dark
+
+# Oxygen penertration depth
+g+geom_bar(aes(x=Station, y=OPD.mean/1000, group=Cruise, fill=Region, colour=Region), stat="identity", position="dodge")+
+  geom_errorbar(aes(x=Station, y=OPD.mean/1000, ymax=(OPD.mean+OPD.sd)/1000, ymin=OPD.mean/1000, group=Cruise, colour=Region), position="dodge")+
+  facet_wrap(~Habitat, scales="free_x")+
+  ylab("Oxygen Penertration Depth (mm)")+
+  scale_y_reverse()+
+  theme_bw()+theme(axis.text.x=element_text(angle = 60, hjust = 1)) #%+replace% dark
+```
+
+```{r, fig.width=10, fig.height=6}
+ob <- read.csv("../GPSC_data/GPSC_o2_profile/GPSC_o2_profile.csv")
+ob$Region <- factor(ob$Region, levels=c("Kaohsiung", "Gaoping", "Fangliao", "Hongtsai", "Penghu", "Formosa", "Dongsha", "Taiping"))
+
+ob$Station <- factor(ob$Station, levels=c("SC2a", "KS1", "KS2", "KS3", "GC1", "GC3", "GC4", "GC5", "GC6", "S1", "S2", "S3", "S4", "S5", "S6", "L1", "S7", "M1", "GS1", "G96", "GS3", "GS4", "GS5", "GS5B", "GS6", "GS7", "GS10", "FC1", "FC2", "FC2A", "FC3", "FC4", "FS1", "FS2", "FS3", "FS5C", "HC1", "S27", "S27a", "ST3", "ST5"))
+
+
+ggplot(data = ob, aes(x=DO.mean, y=Depth/1000, group=.id, colour=Station))+
+  geom_point(size=0.3)+
+  geom_path()+
+  scale_y_reverse()+
+  facet_wrap(~Habitat, scale="free_x")+
+  ylab("Depth (mm)")+
+  xlab(expression(Dissolved~Oxygen~(mu~M)))+
+  theme_bw() #%+replace% dark
+
+ggplot(data = subset(ob, Cruise!="OR1_1128"), aes(x=DO.mean, y=Depth/1000, group=.id, colour=Region))+
+  geom_point(size=0.3)+
+  geom_path()+
+  scale_y_reverse()+
+  facet_wrap(~Habitat, scale="free_x")+
+  ylab("Depth (mm)")+
+  xlab(expression(Dissolved~Oxygen~(mu~M)))+
+  theme_bw() #%+replace% dark
+```
+
+```{r, fig.width=12, fig.height=10}
+ggplot(data = subset(ob, Cruise!="OR1_1128"), aes(x=DO.mean, y=Depth/1000, group=.id, colour=Cruise))+
+  geom_point(size=0.3)+
+  geom_path()+
+  scale_y_reverse()+
+  facet_wrap(~Station, scale="free")+
+  ylab("Depth (mm)")+
+  xlab(expression(Dissolved~Oxygen~(mu~M)))+
+  theme_bw() #%+replace% dark
+```
+
+# Bioturbation profile
+
+```{r}
+ob <- read.csv("../GPSC_data/GPSC_o2_profile/bioturb_o2_profile.csv")
+
+ggplot(data = subset(ob, !(.id=="OR1_1126_GC3_1_2_Ch1"|.id=="OR1_1126_GS3_1_3_Ch1")), aes(x=DO.mean, y=Depth/1000, group=.id, colour=Station))+
+  geom_point(size=0.3)+
+  geom_path()+
+  scale_y_reverse()+
+  facet_wrap(~Habitat, scale="free_x")+
+  ylab("Depth (mm)")+
+  xlab(expression(Dissolved~Oxygen~(mu~M)))+
+  theme_bw() #%+replace% dark
+```
+
+
+```{r}
+fx_d <- summaryBy(Integrated_Prod+In_situ_Integrated_Prod+Integrated_Prod_at_10C~Region+Cruise+Station+Deployment, data=fx, FUN=c(mean, sd, length))
+cru <- read_excel("../GPSC_data/GPSC_macro_sorting/GPSC_macro_sorting_2021.11.23.xlsx", sheet=1)
+id1 <- with(cru, paste(Cruise, Station, Deployment))
+id2 <- with(fx_d, paste(Cruise, Station, Deployment))
+id2[id2=="OR1_1169 GS5 7"] <- "OR1_1169 GS5 1"
+id2[id2=="OR1_1182 SC2a 3"] <- "OR1_1182 SC2 3"
+fx_d <- cbind(cru[match(id2, id1),], fx_d)
+
+# Fit a linear model
+f <- lm((In_situ_Integrated_Prod.mean*864)~Depth*Habitat*Region, data=subset(fx_d, Region=="Gaoping"|Region=="Fangliao"))
+summary(f)
+anova(f)
+
+ls <- splitBy(~Habitat, data=fx_d)
+ls <- ls[names(ls)!="NA"]
+f<-lapply(ls, FUN=function(x)lm((In_situ_Integrated_Prod.mean*864)~Depth, data=x))
+lapply(f, FUN=summary)
+
+f <- lm((In_situ_Integrated_Prod.mean*864)~Depth+Habitat, data=fx_d)
+summary(f)
+
+ggplot(data=subset(fx_d), 
+       aes(x=Depth, y=In_situ_Integrated_Prod.mean*(-864), 
+           ymin=(In_situ_Integrated_Prod.mean-In_situ_Integrated_Prod.sd)*(-864),
+           ymax=(In_situ_Integrated_Prod.mean+In_situ_Integrated_Prod.sd)*(-864),
+           colour=Region, shape=Habitat, group=Habitat))+
+  geom_point(size=3)+
+  scale_shape_manual(values=c(19, 1))+
+  geom_errorbar()+
+  #stat_smooth(method="lm", formula=y~x, alpha=0.2, aes(colour=Habitat, fill=Habitat))+
+  facet_wrap(~Habitat, scales="free")+
+  scale_y_log10()+
+  xlab("Depth (m)")+
+  ylab(expression(Diffusive~Oxygen~Utilization~(mmol~m^-2~day^-1)))+
+  theme_bw() #%+replace% dark
+```
+
+```{r}
+library(RColorBrewer)
+cru <- read_excel("../GPSC_data/GPSC_macro_sorting/GPSC_macro_sorting_2021.11.23.xlsx", sheet=1)
+all <- summaryBy(Longitude+Latitude+Depth~Cruise+Station+Region+Habitat, data=as.data.frame(cru), FUN=mean, keep.names=TRUE)
+id1 <- with(fx_d, paste(Cruise, Station))
+id2 <- with(all, paste(Cruise, Station))
+keep <- match(id1, id2)
+
+out <- cbind(all[keep,], fx_d[, -1:-6])
+out <- subset(out, !is.na(Longitude) & Region!="Taiping" & Region!="Dongsha" & Region!="Penghu" & Region!="Formosa" & Station !="GS10")
+out$Region <- factor(out$Region, levels=c("Kaohsiung", "Gaoping", "Fangliao", "Hongtsai"))
+
+# High resolution SW Taiwan coastline
+tw<-getRgshhsMap("E:/Projects_MOST/GPSC_GIS/gshhs_f.b", xlim=c(119.8, 120.9), ylim=c(21.6, 22.6))
+#save(tw, file="tw.rda")
+
+tw_df <- fortify(tw) # convert to dataframe
+iso200_df <- fortify(iso200) # convert to dataframe
+iso1000_df <- fortify(iso1000) # convert to dataframe
+
+ggplot(tw_df, aes(long,lat, group=group)) + 
+  geom_polygon(fill="gray") + 
+  geom_path(data=iso200_df, linetype=2, colour="gray")+
+  geom_path(data=iso1000_df, linetype=1, colour="gray")+
+  geom_point(data=out, aes(x=Longitude, y=Latitude, group=NULL, colour=Region, shape=Habitat, size=In_situ_Integrated_Prod.mean*(-864)))+
+  scale_colour_manual(values = brewer.pal(4, "Spectral"))+
+  scale_shape_manual(values = c(19, 1))+
+  scale_size_continuous(trans="log2")+
+  coord_fixed()+
+  #facet_wrap(~Cruise)+
+  labs(fill="Region", size = "mmol/m2/d", x="", y="")+
+  theme_bw() %+replace% large %+replace% vert_x %+replace% dark
+```
+
+```{r}
+library(knitr)
+out <- fx_d
+out$In_situ_Integrated_Prod.mean <- out$In_situ_Integrated_Prod.mean*(-864)
+out$Integrated_Prod.mean_at_10C <- out$Integrated_Prod_at_10C.mean*(-864)
+out <- summaryBy(In_situ_Integrated_Prod.mean+In_situ_Integrated_Prod.length~Region+Habitat+Station, data=out, FUN=c(mean, sd, length, sum))
+out <- out[c("Region", "Habitat", "Station", "In_situ_Integrated_Prod.mean.mean", "In_situ_Integrated_Prod.mean.length", "In_situ_Integrated_Prod.length.sum")]
+names(out) <- c("Region", "Habitat", "Station", "DO_flux", "# of cruise", "# of profile")
+cord <- cbind(coordinates(loc), Depth=loc$Depth)[match(out$Station, loc$Station),]
+kable(cbind(cord, out), align="c")
+```
+
+
+```{r, fig.width=10, fig.height=4}
+tou <- read.csv("../GPSC_data/GPSC_incubation/GPSC_TOU.csv")
+tou <- summaryBy(DO_flux+In_situ_DO_flux~Cruise+Station+Deployment+Tube+Habitat+Region+Depth, data=tou, FUN=c(mean, sd))
+dou <- read.csv("../GPSC_data/GPSC_o2_profile/GPSC_DOU.csv")
+dou$In_situ_Integrated_Prod <- dou$In_situ_Integrated_Prod*864
+dou <- summaryBy(In_situ_Integrated_Prod~Cruise+Station+Deployment+Tube++Habitat+Region, data=dou, FUN=c(mean, sd))
+id1 <- with(tou, paste(Cruise, Station, Deployment, Tube))
+id2 <- with(dou, paste(Cruise, Station, Deployment, Tube))
+
+com <- cbind(dou, tou[match(id2, id1), c("DO_flux.mean", "In_situ_DO_flux.mean")])
+names(com)[7:10] <- c("DOU", "DOU.sd", "TOU", "In_situ_TOU")
+com$BOU <- com$TOU-com$DOU
+#com <- com[!is.na(com$BOU),]
+
+id1 <- with(cru, paste(Cruise, Station))
+id2 <- with(com, paste(Cruise, Station))
+com$Depth <- cru$Depth[match(id2, id1)]
+com$Depth[which(is.na(com$Depth))] <- cru$Depth[id1=="OR1_1182 SC2"]
+
+long <- melt(com, id.vars=c("Cruise", "Station", "Deployment", "Tube", "Habitat",  "Region", "Depth"), measure.vars = c("TOU", "BOU", "DOU"), variable.name = "Flux")
+
+long$Region <- factor(long$Region, levels=c("Kaohsiung", "Gaoping", "Fangliao", "Hongtsai", "Penghu", "Formosa", "Dongsha", "Taiping"))
+long$Station <- factor(long$Station, levels=c("SC2a", "KS1", "KS2", "KS3", "GC1", "GC3", "GC4", "GC5", "GC6", "S3", "S4", "S5", "S6", "L1", "S7", "M1", "GS1", "GS3", "GS4", "GS5", "GS5B", "GS6", "GS7", "GS10", "FC1", "FC2", "FC2A", "FC3", "FC4", "FS1", "FS2", "FS3", "FS5C", "HC1", "S27",  "S27a", "ST3", "ST5"))
+
+long <- na.omit(long)
+
+# Fit a linear model
+ls <- splitBy(~Flux, data=long)
+f<-lapply(ls, FUN=function(x)lm((value)~Depth, data=x))
+lapply(f, FUN=summary)
+
+ggplot(data=subset(long, !Flux=="TOU"), aes(x=Station, y=-value, colour=Flux, fill=Flux, group=paste(Cruise, Station, Deployment, Tube)))+
+  geom_bar(stat = "identity", position="dodge")+
+  facet_wrap(~Habitat, scales="free_x")+
+  ylab(expression(Total~Oxygen~Utilization~(mmol~m^-2~d^-1)))+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) #%+replace% dark
+
+ggplot(data=subset(long, !Flux=="TOU"), aes(x=Station, y=-value, colour=Flux, fill=Flux, group=paste(Cruise, Station, Deployment, Tube)))+
+  geom_bar(stat = "identity", position="dodge")+
+  ylim(0, NA)+
+  facet_wrap(~Habitat, scales="free_x")+
+  ylab(expression(Total~Oxygen~Utilization~(mmol~m^-2~d^-1)))+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) #%+replace% dark
+
+ggplot(data=subset(long, !(Flux=="BOU"&value>0)), aes(x=Depth, y=-value, shape=Habitat, colour=Flux, group=Flux))+
+  geom_point(size=3)+
+  stat_smooth(data=subset(long, !(Flux=="BOU"&value>0|Flux=="DOU")), method="lm", formula=y~x, alpha=0.2)+
+  scale_y_log10()+
+  scale_shape_manual(values=c(19, 2, 1))+
+  facet_wrap(~Flux, scales="free")+
+  xlab("Depth (m)")+
+  ylab(expression(Sediment~Oxygen~Utilization~(mmol~m^-2~day^-1)))+
+  theme_bw()+theme(axis.text.x = element_text(angle = 30, hjust = 1)) #%+replace% dark
+```
+
+```{r, fig.width=10, fig.height=4}
+cs <- summaryBy(DOU+TOU+Depth~Cruise+Station+Habitat+Region, data=com, FUN=mean, keep.names = TRUE)
+st <- summaryBy(DOU+TOU+Depth~Station+Habitat+Region, data=cs, FUN=mean, keep.names = TRUE)
+st$BOU <- st$TOU-st$DOU
+long <- melt(st,  measure.vars = c("TOU", "BOU", "DOU"), variable.name = "Flux")
+long <- na.omit(long)
+long$Station <- factor(long$Station, levels=c("SC2a", "KS1", "KS2", "KS3", "GC1", "GC3", "GC4", "GC5", "GC6", "S3", "S4", "S5", "S6", "S7", "GS1", "GS3", "GS4", "GS5", "GS5B", "GS6", "GS7", "GS10", "FC1", "FC2", "FC2A", "FC3", "FC4", "FS1", "FS2", "FS3", "FS5C", "HC1", "S27",  "S27a", "ST3", "ST5"))
+
+ggplot(data=subset(long, !Flux=="TOU"), aes(x=Station, y=-value, colour=Flux, fill=Flux, group=Station))+
+  geom_bar(stat = "identity")+
+  facet_wrap(~Habitat, scales="free_x")+
+  ylab(expression(Total~Oxygen~Utilization~(mmol~m^-2~d^-1)))+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) %+replace% dark
+
+ggplot(data=subset(long, !Flux=="TOU"), aes(x=Station, y=-value, colour=Flux, fill=Flux, group=Station))+
+  geom_bar(stat = "identity", position="dodge")+
+  facet_wrap(~Habitat, scales="free_x")+
+  ylim(0, NA)+
+  ylab(expression(Total~Oxygen~Utilization~(mmol~m^-2~d^-1)))+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) %+replace% dark
+
+```
+
+
+# Match SCOC to environmental data
+```{r, fig.width=10, fig.height=8, eval=FALSE}
+library(plyr)
+# CTD data
+ctd <- as.data.frame(read_excel("../GPSC_data/GPSC_CTD/GPSC_CTD_2019.05.05.xlsx", sheet=1))
+ctd <- splitBy(~Cruise+Station, ctd)
+
+# Function to get average of bottom 3 deepest CTD data
+deep_fun <- function(x) {
+   dat <- x[order(x$pressure, decreasing=TRUE)[1:3],]
+   summaryBy(.~Cruise+Station, data=dat, keep.names=TRUE, na.rm=TRUE)
+}
+
+ctd <- lapply(ctd, FUN=deep_fun)
+ctd <- ldply(ctd)[, -1]
+ctd$transmissometer[ctd$transmissometer<=0] <- 0 # Set negtive transmissometer to zero
+
+# Average temperature, sigma_theta and density
+ctd$Temperature <- rowMeans(ctd[, c("temperature_T1", "temperature_T2")], na.rm=TRUE)
+ctd$Salinity <- rowMeans(ctd[, c("salinity_T1C1", "salinity_T2C2")], na.rm=TRUE)
+ctd$Sigma_theta <- rowMeans(ctd[, c("density_T1C1...11", "density_T2C2...12")], na.rm=TRUE)
+ctd$Density <- rowMeans(ctd[, c("density_T1C1...13", "density_T2C2...14")], na.rm=TRUE)
+
+id1 <- with(ctd, paste(Cruise, Station))
+id2 <- with(com, paste(Cruise, Station))
+# Fill station with no CTD data
+id2[id2=="OR1_1190 FC2A"] <- "OR1_1190 FC2"
+id2[id2=="OR1_1190 GS6"] <- "OR1_1138 GS6"
+ctd <- ctd[match(id2, id1), ]
+
+# Sediment data
+col_types <- c(rep("text", 2), "numeric", "text", rep("numeric", 9))
+sed <- as.data.frame(read_excel("../GPSC_data/GPSC_sediment/GPSC_sediment_2019.5.11.xlsx", sheet=1, col_types=col_types))
+sed <- sed[sed$Section=="0-1",]
+
+id1 <- with(sed, paste(Cruise, Station))
+id2 <- with(com, paste(Cruise, Station))
+# Fill station with no CTD data
+id2[id2=="OR1_1190 FS5C"] <- "OR1_1190 FS5B"
+sed <- sed[match(id2, id1), ]
+
+# Prokaryote data
+bac <- read_excel("../GPSC_data/GPSC_bact/GPSC_bacteria_count_OR1-1190.xlsx", sheet=1, skip=1, n_max=10)[,-1]
+bac <- melt(bac)
+bac$Bac_abun <- bac$value*133884.298
+fro <- ldply(strsplit(as.character(bac$variable), split="-"))
+names(fro) <- c("Station", "Deployment", "Tube")
+bac <- cbind(fro, bac)
+bac$Cruise <- "OR1_1190"
+# Convert to biomass (ug ml-1) (assuming 10 fgC cell-1, Deming & Capenter 2008)
+bac$Bac_biom <- bac$Bac_abun*10/1E6
+bac <- summaryBy(Bac_abun+Bac_biom~Cruise+Station, data=bac, keep.names=TRUE)
+id1 <- with(bac, paste(Cruise, Station))
+id2 <- with(com, paste(Cruise, Station))
+bac <- bac[match(id2, id1), ]
+
+# Macrofauna
+# Biomass
+col_types <- c("text", "text", "text", "numeric", "numeric", "text", "text", "text", "text", "text", "text", 
+              "numeric", "numeric", "numeric", "numeric", "numeric", "text")
+mac <- NULL
+for(i in 1:15){
+  d <- read_excel("../GPSC_data/GPSC_macro_size/GPSC_macro_size_2019.04.30.xlsx", sheet=i, col_types=col_types)
+  mac <- rbind(mac, d)
+}
+mac <- as.data.frame(mac)
+mac <- subset(mac, Size<100)
+mac <- summaryBy(Size~Region+Habitat+Cruise+Station+Deployment+Tube, data=mac, FUN=sum)
+mac$log10_Mac_biom <- log10(mac$Size.sum*1.13/0.008659015)
+id1 <- with(mac, paste(Cruise, Station, Tube))
+id2 <- with(com, paste(Cruise, Station, Tube))
+mac <- mac[match(id2, id1), ]
+# Density
+bio <- read.csv("../GPSC_PRIMER/Macro_taxa_by_site.csv")
+id1 <- with(bio, paste(Cruise, Station, Tube))
+id2 <- with(com, paste(Cruise, Station, Tube))
+mac$log10_Mac_abun <- log10(rowSums(bio[,2:33])/0.008659015)[match(id2, id1)]
+
+# Combine environmental data
+env <- cbind(ctd[, c("pressure", "Temperature", "Salinity", "Sigma_theta", "Density", "Oxygen", "fluorometer" , "transmissometer")],
+             bac[, c("Bac_abun", "Bac_biom")],
+             mac[, c("log10_Mac_abun", "log10_Mac_biom")],
+             sed[, c("Clay", "Silt", "Sand", "CN", "TOC", "TN", "WC", "WW", "DW")]
+             )
+row.names(env) <- row.names(com)
+
+# Calculate porosity
+# Pore space volume using pore water mass bottom water density
+# Fill in seawater desnity for sites not having CTD data 
+library(seacarb)
+
+dens <- env$Density
+vp <- (env$WW-env$DW)/(dens/1000)
+# Dry sediment volume assuming density of 2.65 g/cm3 
+vb <- env$DW/2.65
+env$Porosity <- vp/(vp+vb)
+
+long <- melt(cbind(com, env), id.vars=c("DOU", "Habitat"), measure.vars = c("Depth", "Temperature", "Salinity", "Density", "Oxygen", "fluorometer", "transmissometer", "Bac_biom", "log10_Mac_abun", "log10_Mac_biom", "Clay", "Silt", "Sand", "CN", "TOC", "TN"))
+
+p <- lapply(splitBy(~variable+Habitat, long), FUN=function(x)cor.test(-x$DOU, x$value)$p.value) %>% unlist()
+
+long2 <- ldply(splitBy(~variable+Habitat, long)[p<0.05])
+
+ggplot(data=long, aes(x=value, y=-DOU, colour=Habitat))+
+  geom_point()+
+  stat_smooth(data=long2, formula=y~x, method="lm", se=FALSE)+
+  facet_wrap(~variable, scales="free_x")+
+  scale_y_log10()+
+  xlab("")+
+  ylab(expression(Diffusive~Oyxgen~Utilization~(mmol~m^-2~day^-1)))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) %+replace% dark
+```
+
+```{r, fig.width=10, fig.height=8, eval=FALSE}
+long <- melt(cbind(com, env), id.vars=c("BOU", "Habitat"), measure.vars = c("Depth", "Temperature", "Salinity", "Density", "Oxygen", "fluorometer", "transmissometer", "Bac_biom", "log10_Mac_abun", "log10_Mac_biom", "Clay", "Silt", "Sand", "CN", "TOC", "TN"))
+
+long <- na.omit(long)
+
+p <- lapply(splitBy(~variable+Habitat, long), FUN=function(x)cor.test(-x$BOU, x$value)$p.value) %>% unlist()
+
+long2 <- ldply(splitBy(~variable+Habitat, long)[p<0.05])
+
+ggplot(data=long, aes(x=value, y=-BOU, colour=Habitat))+
+  geom_point()+
+  stat_smooth(data=long2, formula=y~x, method="lm", se=FALSE)+
+  facet_wrap(~variable, scales="free_x")+
+  scale_y_log10()+
+  xlab("")+
+  ylab(expression(Benthos~Oyxgen~Utilization~(mmol~m^-2~day^-1)))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) %+replace% dark
+```
+
